@@ -1,0 +1,47 @@
+{
+  "composites": [
+    {
+      "name": "stream_source",
+      "root": {
+        "file": "source.py",
+        "function": "stream",
+        "branches": [
+          {
+            "pattern": "video",
+            "file": "video_process.py",
+            "function": "process",
+            "branches": [
+              {
+                "pattern": "resolution",
+                "file": "video_converter.py",
+                "function": "convert"
+              },
+              {
+                "pattern": "analysis",
+                "file": "analyser.py",
+                "function": "analyse"
+              }
+            ]
+          },
+          {
+            "pattern": "audio",
+            "file": "audio_process.py",
+            "function": "process",
+            "branches": [
+              {
+                "pattern": "amplify",
+                "file": "amplifier.py",
+                "function": "amplify"
+              }
+            ]
+          },
+          {
+            "pattern": "subtitle",
+            "file": "text_process.py",
+            "function": "process"
+          }
+        ]
+      }
+    }
+  ]
+}
