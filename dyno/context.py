@@ -1,9 +1,11 @@
 from collections import defaultdict
-from typing import Any, Dict, Iterator, List, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
+
+# https://docs.python.org/3/library/collections.html#collections.defaultdict
 
 
 class context:
-    def __init__(self, store: Dict[str, List[Any]] = None):
+    def __init__(self, store: Optional[Dict[str, List[Any]]] = None):
         self._store = defaultdict(list)
         if store:
             self._store.update(store)
@@ -14,7 +16,7 @@ class context:
     def get(self, input_key: str) -> List[Any]:
         if input_key not in self._store:
             raise KeyError(f"The key is not registered in the context: {input_key}")
-        return self._store[input_key]
+        return self._store.pop(input_key)
 
     def __iter__(self) -> Iterator[str]:
         return iter(self._store.keys())
