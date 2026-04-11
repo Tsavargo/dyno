@@ -1,29 +1,37 @@
 import multiprocessing
+from typing import Any, Callable
 
 from .context import context
 
 
-def parallel(input_context: context, function) -> context:
-    # 1. Create a Manager to handle inter-process communication
+class proxy:
+    def __init__(self, shared_list):
+        self.list = shared_list
+
+    def register(self, key: str, obj: Any) -> None:
+        self.list.append((key, obj))
+
+
+def parallel(input_context: context, target_key: str, function: Callable) -> context:
+    try:
+        items_to_process = input_context.get(target_key)
+    except KeyError:
+        return context()
+
+    if not items_to_process:
+        return context()
+
     with multiprocessing.Manager() as manager:
-        # 2. Create a process-safe shared list
         shared_list = manager.list()
+        proxy_context = proxy(shared_list)
 
-        # 3. Create the new context, passing in the shared list
-        output_context = context(store=shared_list)
+        tasks = [(item, proxy_context) for item in items_to_process]
 
-        # 4. Prepare the tasks (argument lists) for the Pool.
-        tasks = []
-        for key, value in input_context.items():
-            tasks.append((value, output_context))
-
-        # 5. Start the Pool
         with multiprocessing.Pool() as pool:
             pool.starmap(function, tasks)
 
-        # 6. Copy the data into a standard, final context instance
         final_context = context()
-        for key, value in output_context.items():
+        for key, value in shared_list:
             final_context.register(key, value)
 
     return final_context
