@@ -1,27 +1,26 @@
-from typing import Any, Iterator, Tuple
+from collections import defaultdict
+from typing import Any, Dict, Iterator, List, Tuple
 
-
-# object ősosztály?
-# collections.abc
 
 class context:
-    def __init__(self, store=None):
-        self._store = store if store is not None else []
+    def __init__(self, store: Dict[str, List[Any]] = None):
+        self._store = defaultdict(list)
+        if store:
+            self._store.update(store)
 
     def register(self, key: str, obj: Any) -> None:
-        self._store.append((key, obj))
+        self._store[key].append(obj)
 
-    def get(self, input_key: str) -> list[Any]:
-        results = [value for key, value in self._store if key == input_key]
-        if not results:
+    def get(self, input_key: str) -> List[Any]:
+        if input_key not in self._store:
             raise KeyError(f"The key is not registered in the context: {input_key}")
-        return results
+        return self._store[input_key]
 
     def __iter__(self) -> Iterator[str]:
-        return (key for key, value in self._store)
+        return iter(self._store.keys())
 
-    def items(self) -> Iterator[Tuple[str, Any]]:
-        return iter(self._store)
+    def items(self) -> Iterator[Tuple[str, List[Any]]]:
+        return iter(self._store.items())
 
     def __len__(self) -> int:
         return len(self._store)
