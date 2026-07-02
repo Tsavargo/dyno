@@ -1,0 +1,71 @@
+{
+  "Comment": "Auto-generated Step Functions state machine from composites",
+  "QueryLanguage": "JSONata",
+  "StartAt": "<< composites[0].name >>",
+  "States": {
+
+    <%#- Az első kompozit: sima Lambda Task %>
+    "<< composites[0].name >>": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Arguments": {
+        "FunctionName": "arn:aws:lambda:<< aws_region >>:<< aws_account >>:function:<< composites[0].name >>:$LATEST",
+        "Payload": "{% $states.input << '%}' >>"
+      },
+      "Output": "{% { 'runtimeID': $states.result.Payload.runtimeID } << '%}' >>",
+      "Next": "<< composites[1].name >>"
+    }<%- if composites | length > 1 %>,<%- endif %>
+
+    <%#- A 2..N kompozit: Distributed Map %>
+    <%- for composite in composites[1:] %>
+    <%- set key = composite.functions[0].input %>
+    <%- set is_last = loop.last %>
+    "<< composite.name >>": {
+      "Type": "Map",
+      "ItemReader": {
+        "Resource": "arn:aws:states:::s3:listObjectsV2",
+        "ReaderConfig": {
+          "Transformation": "NONE"
+        },
+        "Arguments": {
+          "Bucket": "<< s3_bucket >>",
+          "Prefix": "{% 'stepfunctions-cache/' & $states.input.runtimeID & '/<< key >>/' << '%}' >>"
+        }
+      },
+      "ItemSelector": {
+        "runtimeID": "{% $states.input.runtimeID %}",
+        "Item": "{% $states.context.Map.Item.Value %}"
+      },
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "DISTRIBUTED",
+          "ExecutionType": "STANDARD"
+        },
+        "StartAt": "<< composite.name >>_task",
+        "States": {
+          "<< composite.name >>_task": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Arguments": {
+              "FunctionName": "arn:aws:lambda:<< aws_region >>:<< aws_account >>:function:<< composite.name >>:$LATEST",
+              "Payload": {
+                "runtimeID": "{% $states.input.runtimeID << '%}' >>",
+                "item": "{% $states.input.Item.Key << '%}' >>"
+              }
+            },
+            "Output": "{% $states.result.Payload << '%}' >>",
+            "End": true
+          }
+        }
+      },
+      "Output": "{% { 'runtimeID': $states.input.runtimeID } << '%}' >>",
+      <%- if is_last %>
+      "End": true
+      <%- else %>
+      "Next": "<< composites[loop.index + 1].name >>"
+      <%- endif %>
+    }<%- if not is_last %>,<%- endif %>
+    <%- endfor %>
+
+  }
+}

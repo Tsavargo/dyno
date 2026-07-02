@@ -1,211 +1,245 @@
+#!/usr/bin/env python3
+
+"""
+Lambda Orchestrator Generator
+
+This script parses a configuration JSON to assemble "composite" Lambda functions.
+A composite is a unified Lambda package composed of multiple "atomic" functions.
+The script handles copying the required atomic modules into a target directory
+and generates a 'main.py' orchestrator file using a Jinja2 template. This orchestrator
+manages the internal input/output flow between the atomic functions within the same Lambda.
+"""
+
+import argparse
 import json
 import os
 import shutil
-from typing import Any, Dict, List, Set
-
-# TODO: a kulcsokat ellenőrző logikát ki kell emelni egy újrafelhasználható
-# kódrészletbe, ami egy listát kap az ellenőrizendő kulcsokkal
-
-# TODO: a kompozit függvény hívási fájának a levelein kiírni az outputokat
-# a felhőben lévő data store-ba, külön függvény implementálása
-
-# TODO: monitoring szinkronizációs ponton
-
-# TODO: dinamikus csomagolás Terraformmal
+import sys
+from typing import Any, Dict, List
 
 
-def get_all_imports(node: Dict[str, Any], imports_set: Set[str]) -> None:
-    file_name = node.get("file")
-    function_name = node.get("function")
-
-    # Raise an exception if essential keys are missing
-    if not file_name or not function_name:
-        raise ValueError(
-            "Invalid node configuration: Missing 'file' or 'function' key for imports."
-        )
-
-    # Safely remove the '.py' extension from the end of the file name
-    module_name = file_name.removesuffix(".py")
-
-    # Create unique alias name
-    alias_name = f"{module_name}_{function_name}"
-
-    # Add the formatted import string to the set using the alias
-    imports_set.add(f"from {module_name} import {function_name} as {alias_name}")
-
-    # Recursively process child branches
-    for branch in node.get("branches", []):
-        get_all_imports(branch, imports_set)
-
-
-def generate_node_logic(
-    node: Dict[str, Any], input_ctx_name: str, lines: List[str]
+def validate_required_keys(
+    node: Dict[str, Any], required_keys: List[str], node_index: int
 ) -> None:
-    branches = node.get("branches", [])
-    if not branches:
-        return
-
-    # Raise an exception if essential keys are missing
-    func_name = node.get("function")
-    if not func_name:
-        raise ValueError("Invalid node configuration: Missing 'function' key.")
-
-    lines.append(f"\n\t# --- {func_name} outputs ---")
-
-    # Generate context initializations
-    for branch in branches:
-        branch_file = branch.get("file")
-        branch_function = branch.get("function")
-        if not branch_function or not branch_file:
-            raise ValueError(
-                "Invalid branch configuration: Missing 'function' or 'file' key."
-            )
-        module_name = branch_file.removesuffix(".py")
-        branch_function_alias = f"{module_name}_{branch_function}"
-        lines.append(f"\tctx_in_{branch_function_alias} = context()")
-
-    # Generate pattern matching loop
-    lines.append(f"\tfor key, value in {input_ctx_name}.items():")
-
-    for iter, branch in enumerate(branches):
-        pattern = branch.get("pattern")
-        branch_file = branch.get("file")
-        branch_function = branch.get("function")
-        if not branch_function or not branch_file or not pattern:
-            raise ValueError(
-                "Invalid branch configuration: Missing 'function' or 'file' or 'pattern' key."
-            )
-        module_name = branch_file.removesuffix(".py")
-        branch_function_alias = f"{module_name}_{branch_function}"
-
-        keyword = "if" if iter == 0 else "elif"
-        lines.append(f"\t\t{keyword} re.match(r'{pattern}', str(key)):")
-        lines.append(f"\t\t\tctx_in_{branch_function_alias}.register(key, value)")
-
-    # Generate child function calls
-    lines.append(f"\n\t# --- {func_name} children ---")
-    for branch in branches:
-        file_name = branch.get("file")
-        module_name = file_name.removesuffix(".py")
-        function_name = branch.get("function")
-        child_function = f"{module_name}_{function_name}"
-        lines.append(f"\tctx_out_{child_function} = context()")
-        lines.append(f"\tif len(ctx_in_{child_function}) > 0:")
-        lines.append(
-            f"\t\tctx_out_{child_function} = parallel(ctx_in_{child_function}, {child_function})"
-        )
-
-    # Recursively generate logic for children
-    for branch in branches:
-        child_function = branch.get("function")
-        child_file = branch.get("file")
-        child_module = child_file.removesuffix(".py")
-        child_alias = f"{child_module}_{child_function}"
-        generate_node_logic(branch, f"ctx_out_{child_alias}", lines)
-
-
-def generate_composite_file(composite_data: Dict[str, Any], output_dir: str) -> None:
-    composite_name = composite_data.get("name")
-    root = composite_data.get("root")
-
-    # Raise an exception if essential keys are missing
-    if not composite_name or not root:
+    """
+    Validates that an atomic function configuration node contains all strictly required keys.
+    Prevents generating invalid imports or handler mappings later in the process.
+    """
+    missing = [key for key in required_keys if key not in node]
+    if missing:
         raise ValueError(
-            "Invalid composite configuration: Missing 'name' or 'root' key."
+            f"Invalid configuration at node index {node_index}. "
+            f"Missing key(s): {missing}. Node: {node}"
         )
 
-    lines = [
-        "import re",
-        "from dyno import context",
-        "from dyno import parallel",
+
+def build_import_alias(node: Dict[str, Any]) -> str:
+    """
+    Constructs a unique alias for the imported atomic module to prevent namespace collisions.
+    Format: {module_name}_{input_parameter_name}
+    """
+    return f"{node['module']}_{node['input']}"
+
+
+def copy_component_files(
+    functions: List[Dict[str, Any]], source_dir: str, destination_dir: str
+) -> None:
+    """
+    Gathers the source code of the individual atomic functions and copies them
+    into the composite Lambda's deployment package directory.
+    """
+    for function in functions:
+        module_name = function.get("module")
+        if not module_name:
+            continue
+
+        src = os.path.join(source_dir, module_name)
+        dst = os.path.join(destination_dir, module_name)
+
+        # Skip missing modules to allow partial builds, but warn the user
+        if not os.path.isdir(src):
+            print(f"[WARNING] Component directory not found, skipping: {src}")
+            continue
+
+        # Copy the atomic module into the composite package structure
+        shutil.copytree(src, dst, dirs_exist_ok=True)
+
+        # Ensure the copied directory acts as a valid Python package
+        init_path = os.path.join(dst, "__init__.py")
+        if not os.path.exists(init_path):
+            open(init_path, "a").close()
+
+
+def generate_orchestration_file(
+    composite: Dict[str, Any], output_dir: str, template_file: str, is_root: bool
+) -> None:
+    """
+    Renders the 'main.py' entrypoint for the composite Lambda.
+    This orchestrator dictates how data flows between the bundled atomic functions.
+    """
+    from jinja2 import Environment, FileSystemLoader
+
+    composite_name = composite.get("name")
+    nodes = composite.get("functions", [])
+
+    if not composite_name or not nodes:
+        raise ValueError(
+            "Invalid composite configuration: missing 'name' or 'functions'."
+        )
+
+    for index, node in enumerate(nodes):
+        validate_required_keys(node, ["module", "input"], index)
+
+    # The first atomic function receives the direct invocation event payload
+    first_node = nodes[0]
+    first_alias = build_import_alias(first_node)
+    first_input_key = first_node["input"]
+
+    # Subsequent atomic functions might be executed in parallel or sequentially
+    # based on the template logic. We prep the payload context here.
+    parallel_steps = [
+        {"alias": build_import_alias(node), "input_key": node["input"]}
+        for node in nodes[1:]
     ]
 
-    # Collect and append imports
-    imports: Set[str] = set()
-    get_all_imports(root, imports)
-    lines.extend(list(imports))
-
-    # Generate the handler function definition
-    lines.append(f"\n\ndef handler_{composite_name}(initial_input):")
-    lines.append("\t# --- Run root ---")
-    lines.append("\troot_ctx = context()")
-
-    root_function = root.get("function")
-    root_file = root.get("file")
-    if not root_function or not root_file:
-        raise ValueError(
-            "Invalid root configuration: Missing 'function' or 'file' key."
+    # Generate distinct import statements for each atomic function, avoiding duplicates
+    import_statements = list(
+        dict.fromkeys(
+            f"from {node['module']}.main import handler as {build_import_alias(node)}"
+            for node in nodes
         )
+    )
 
-    root_module = root_file.removesuffix(".py")
+    # Configure the Jinja2 environment with custom delimiters to avoid conflicts
+    # with native Python syntax.
+    template_path = os.path.abspath(template_file)
+    env = Environment(
+        loader=FileSystemLoader(os.path.dirname(template_path)),
+        trim_blocks=True,
+        lstrip_blocks=True,
+        keep_trailing_newline=True,
+        variable_start_string="<<",
+        variable_end_string=">>",
+        block_start_string="<%",
+        block_end_string="%>",
+        comment_start_string="<%#",
+        comment_end_string="%>",
+    )
+    template = env.get_template(os.path.basename(template_path))
 
-    lines.append(f"\t{root_module}_{root_function}(initial_input, root_ctx)")
+    # Inject the mapping logic into the template
+    rendered = template.render(
+        is_root=is_root,
+        import_statements=import_statements,
+        first_alias=first_alias,
+        first_input_key=first_input_key,
+        parallel_steps=parallel_steps,
+    )
 
-    # Call the logic generator
-    generate_node_logic(root, "root_ctx", lines)
+    # Persist the orchestrated entrypoint into the target Lambda directory
+    output_file = os.path.join(output_dir, "main.py")
+    with open(output_file, "w", encoding="utf-8") as file:
+        file.write(rendered)
 
-    lines.append("\n\treturn 'Successful run'")
-
-    # Write the generated code to a file safely
-    file_path = os.path.join(output_dir, f"{composite_name}.py")
-    with open(file_path, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines) + "\n")
-
-    print(f"[SUCCESS] Generated file: {file_path}")
-
-
-def collect_files(node: Dict[str, Any], input_dir: str, output_dir: str) -> None:
-    file_name = node.get("file")
-
-    if file_name:
-        # Safely join paths regardless of OS
-        file_path = os.path.join(input_dir, file_name)
-
-        try:
-            shutil.copy(file_path, output_dir)
-            print(f"[COPIED] file: {file_path} to: {output_dir}")
-        except FileNotFoundError:
-            print(f"[ERROR] File not found: {file_path}")
-
-    # Recursively process child branches
-    for branch in node.get("branches", []):
-        collect_files(branch, input_dir, output_dir)
+    print(f"[OK] {'root' if is_root else 'map ':4} {composite_name} → {output_file}")
 
 
-def generate_project(json_file_path: str, input_dir: str, output_dir: str) -> None:
-    # Create the output directory safely
+def generate_project(
+    config_file: str, source_dir: str, output_dir: str, template_dir: str
+) -> None:
+    """
+    Main controller for the project generation pipeline. It reads the composite definitions,
+    creates the output directories, copies dependencies, and triggers the orchestrator generator.
+    """
+    if not os.path.exists(config_file):
+        print(f"[ERROR] Config file not found: {config_file}", file=sys.stderr)
+        sys.exit(1)
+
     os.makedirs(output_dir, exist_ok=True)
 
-    with open(json_file_path, "r", encoding="utf-8") as file:
-        data = json.load(file)
+    with open(config_file, "r", encoding="utf-8") as file:
+        config = json.load(file)
 
-    composites = data.get("composites", [])
-    print(f"Project loaded. Found {len(composites)} composite functions.\n")
+    composites = config.get("composites", [])
+    if not composites:
+        print("[ERROR] No composites found in config.", file=sys.stderr)
+        sys.exit(1)
 
-    # Process each composite function
-    for composite_function in composites:
-        composite_name = composite_function.get("name")
-        composite_root = composite_function.get("root")
+    print(f"Loaded {len(composites)} composite(s) from {config_file}\n")
 
-        # Raise an exception if essential keys are missing
-        if not composite_name or not composite_root:
+    # Process each composite defined in the JSON configuration
+    for index, composite in enumerate(composites):
+        composite_name = composite.get("name")
+        functions = composite.get("functions")
+
+        if not composite_name or not functions:
             raise ValueError(
-                f"Invalid project configuration: '{composite_name}' composite function is missing its 'name' or 'root'."
+                f"Composite at index {index} is missing 'name' or 'functions'."
             )
 
-        # Safely join paths regardless of OS
-        composite_dir = os.path.join(output_dir, composite_name)
+        composite_output_dir = os.path.join(output_dir, composite_name)
+        os.makedirs(composite_output_dir, exist_ok=True)
 
-        # Create the specific directory for the composite
-        os.makedirs(composite_dir, exist_ok=True)
+        # Bring in the atomic function source code
+        copy_component_files(functions, source_dir, composite_output_dir)
 
-        # Copy atomic functions to the composite directory
-        collect_files(composite_root, input_dir, composite_dir)
-        # Generates the orchestrator file
-        generate_composite_file(composite_function, composite_dir)
+        # Build the glue code that strings them together
+        generate_orchestration_file(
+            composite,
+            composite_output_dir,
+            template_dir,
+            is_root=(index == 0),
+        )
 
-    print("Project generation completed!")
+    print("\n[DONE] Project generation completed.")
 
 
-# Run
-generate_project("../schema/stream.json", "./functions/", "./composites/")
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Generate Lambda orchestrator files from a composites JSON config.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    parser.add_argument(
+        "-c",
+        "--config",
+        required=True,
+        metavar="PATH",
+        help="Path to the composites JSON config file",
+    )
+    parser.add_argument(
+        "-s",
+        "--source",
+        required=True,
+        metavar="DIR",
+        help="Directory containing the atomic components",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        required=True,
+        metavar="DIR",
+        help="Output directory for generated composite Lambdas",
+    )
+    parser.add_argument(
+        "-t",
+        "--template",
+        required=True,
+        metavar="FILE",
+        help="Path to the Jinja2 Python template",
+    )
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    generate_project(
+        config_file=args.config,
+        source_dir=args.source,
+        output_dir=args.output,
+        template_dir=args.template,
+    )
+
+
+if __name__ == "__main__":
+    main()
