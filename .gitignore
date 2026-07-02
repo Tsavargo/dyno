@@ -1,0 +1,20 @@
+# User secrets
+.env
+
+# Terraform
+source/terraform/build_zips/
+source/terraform/layer_staging/
+source/terraform/.terraform/
+source/terraform/*.tfstate
+source/terraform/*.tfstate.*
+source/terraform/*.tfplan
+
+# Generated code
+output/
+
+# Python
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
