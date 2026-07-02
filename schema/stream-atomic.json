@@ -1,0 +1,67 @@
+{
+  "composites": [
+    {
+      "name": "stream_source",
+      "functions": [
+        {
+          "module": "source",
+          "input": "trigger"
+        }
+      ]
+    },
+    {
+      "name": "video_process",
+      "functions": [
+        {
+          "module": "video_process",
+          "input": "video"
+        }
+      ]
+    },
+    {
+      "name": "video_convert",
+      "functions": [
+        {
+          "module": "video_convert",
+          "input": "convert"
+        }
+      ]
+    },
+    {
+      "name": "analyser",
+      "functions": [
+        {
+          "module": "analyser",
+          "input": "analyse"
+        }
+      ]
+    },
+    {
+      "name": "audio_process",
+      "functions": [
+        {
+          "module": "audio_process",
+          "input": "audio"
+        }
+      ]
+    },
+    {
+      "name": "amplifier",
+      "functions": [
+        {
+          "module": "amplifier",
+          "input": "amplify"
+        }
+      ]
+    },
+    {
+      "name": "text_process",
+      "functions": [
+        {
+          "module": "text_process",
+          "input": "subtitle"
+        }
+      ]
+    }
+  ]
+}

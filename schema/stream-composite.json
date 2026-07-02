@@ -1,0 +1,42 @@
+{
+  "composites": [
+    {
+      "name": "stream_source",
+      "functions": [
+        {
+          "module": "source",
+          "input": "trigger"
+        },
+        {
+          "module": "audio_process",
+          "input": "audio"
+        },
+        {
+          "module": "amplifier",
+          "input": "amplify"
+        },
+        {
+          "module": "text_process",
+          "input": "subtitle"
+        }
+      ]
+    },
+    {
+      "name": "video_prcess",
+      "functions": [
+        {
+          "module": "video_process",
+          "input": "video"
+        },
+        {
+          "module": "video_convert",
+          "input": "convert"
+        },
+        {
+          "module": "analyser",
+          "input": "analyse"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+{
+  "Comment": "Auto-generated Step Functions state machine from composites",
+  "QueryLanguage": "JSONata",
+  "StartAt": "stream_source",
+  "States": {    "stream_source": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Arguments": {
+        "FunctionName": "arn:aws:lambda:us-east-1:267432323971:function:stream_source:$LATEST",
+        "Payload": "{% $states.input %}"
+      },
+      "Output": "{% { 'runtimeID': $states.result.Payload.runtimeID } %}",
+      "Next": "video_prcess"
+    },    "video_prcess": {
+      "Type": "Map",
+      "ItemReader": {
+        "Resource": "arn:aws:states:::s3:listObjectsV2",
+        "ReaderConfig": {
+          "Transformation": "NONE"
+        },
+        "Arguments": {
+          "Bucket": "learner-lab-composite-data-vbbw3o",
+          "Prefix": "{% 'stepfunctions-cache/' & $states.input.runtimeID & '/video/' %}"
+        }
+      },
+      "ItemSelector": {
+        "runtimeID": "{% $states.input.runtimeID %}",
+        "Item": "{% $states.context.Map.Item.Value %}"
+      },
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "DISTRIBUTED",
+          "ExecutionType": "STANDARD"
+        },
+        "StartAt": "video_prcess_task",
+        "States": {
+          "video_prcess_task": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Arguments": {
+              "FunctionName": "arn:aws:lambda:us-east-1:267432323971:function:video_prcess:$LATEST",
+              "Payload": {
+                "runtimeID": "{% $states.input.runtimeID %}",
+                "item": "{% $states.input.Item.Key %}"
+              }
+            },
+            "Output": "{% $states.result.Payload %}",
+            "End": true
+          }
+        }
+      },
+      "Output": "{% { 'runtimeID': $states.input.runtimeID } %}",      "End": true    }
+  }
+}
