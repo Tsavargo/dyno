@@ -1,6 +1,7 @@
 <% if is_root %>
 import uuid
 <% endif %>
+import traceback
 from dyno import context, parallel<% if not is_root %>, read_cache<% endif %>, write_cache
 <% for stmt in import_statements %>
 << stmt >>
@@ -10,22 +11,47 @@ from dyno import context, parallel<% if not is_root %>, read_cache<% endif %>, w
 def lambda_handler(event, aws_context):
 <% if is_root %>
     runtime_id = str(uuid.uuid4())
+    print(f"[{runtime_id}] Root composite triggered")
 <% else %>
     runtime_id = event["runtimeID"]
     item_key = event["item"]
+    print(f"[{runtime_id}] Map composite invoked for item: {item_key}")
 <% endif %>
     ctx = context(runtime_id)
+
+    try:
 <% if not is_root %>
-    object = read_cache(item_key)
-    ctx.register("<< first_input_key >>", object)
+        print(f"[{runtime_id}] Reading cache: {item_key}")
+        object = read_cache(item_key)
+        ctx.register("<< first_input_key >>", object)
+        print(f"[{runtime_id}] Cache loaded into key '<< first_input_key >>'")
 <% endif %>
-    << first_alias >>("<< first_input_key >>", ctx)
+
+        print(f"[{runtime_id}] Running: << first_alias >>")
+        << first_alias >>("<< first_input_key >>", ctx)
+        print(f"[{runtime_id}] Completed: << first_alias >>")
+
 <% for step in parallel_steps %>
-    parallel(ctx, "<< step.input_key >>", << step.alias >>)
+        print(f"[{runtime_id}] Running parallel: << step.alias >> (key='<< step.input_key >>')")
+        parallel(ctx, "<< step.input_key >>", << step.alias >>)
+        print(f"[{runtime_id}] Completed parallel: << step.alias >>")
+
 <% endfor %>
-    write_cache(ctx)
-    return {
-        "statusCode": 200,
-        "body": "Successful run",
-        "runtimeID": runtime_id,
-    }
+        print(f"[{runtime_id}] Writing cache to S3")
+        write_cache(ctx)
+        print(f"[{runtime_id}] Cache written. Keys: {list(ctx)}")
+
+        return {
+            "statusCode": 200,
+            "body": "Successful run",
+            "runtimeID": runtime_id,
+        }
+
+    except Exception as exc:
+        print(f"[{runtime_id}] ERROR: {exc}")
+        traceback.print_exc()
+        return {
+            "statusCode": 500,
+            "body": str(exc),
+            "runtimeID": runtime_id,
+        }
