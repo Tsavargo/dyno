@@ -51,11 +51,45 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${SCRIPT_DIR}/.env"
 
 if [[ ! -f "$ENV_FILE" ]]; then
-  die ".env file not found: $ENV_FILE\n        Please copy the example and fill it in: cp .env.example .env"
+  warn ".env file not found. Using built-in defaults."
+  warn "To customize, copy .env.example to .env:  cp .env.example .env"
+else
+  # shellcheck source=/dev/null
+  source "$ENV_FILE"
 fi
 
-# shellcheck source=/dev/null
-source "$ENV_FILE"
+# ── Default project configuration ─────────────────────────────────────────────
+# Every value below can be overridden by .env. These are the built-in defaults.
+
+CONFIG_FILE="${CONFIG_FILE:-schema/stream-composite.json}"
+SOURCE_DIR="${SOURCE_DIR:-source/functions/}"
+OUTPUT_DIR="${OUTPUT_DIR:-output/}"
+TEMPLATE_FILE="${TEMPLATE_FILE:-source/orchestrator_template.py.j2}"
+ASL_TEMPLATE_FILE="${ASL_TEMPLATE_FILE:-source/asl_template.asl.j2}"
+ORCHESTRATOR_SCRIPT="${ORCHESTRATOR_SCRIPT:-source/orchestrator_generator.py}"
+ASL_SCRIPT="${ASL_SCRIPT:-source/asl_generator.py}"
+TERRAFORM_DIR="${TERRAFORM_DIR:-source/terraform/}"
+DYNO_REQUIREMENTS_FILE="${DYNO_REQUIREMENTS_FILE:-source/python/dyno/requirements.txt}"
+DYNO_LAYER_SOURCE_DIR="${DYNO_LAYER_SOURCE_DIR:-source/python/dyno/}"
+
+# ── Auto-detect AWS values ────────────────────────────────────────────────────
+
+if [[ -z "${AWS_ACCOUNT_ID:-}" ]]; then
+  info "AWS_ACCOUNT_ID not set. Auto-detecting via AWS CLI..."
+  AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text 2>/dev/null) \
+    || die "Could not auto-detect AWS account ID. Either configure AWS CLI (aws configure) or set AWS_ACCOUNT_ID in .env"
+  log "Auto-detected AWS Account ID: ${YELLOW}$AWS_ACCOUNT_ID${NC}"
+fi
+
+if [[ -z "${AWS_REGION:-}" ]]; then
+  AWS_REGION=$(aws configure get region 2>/dev/null) || true
+  if [[ -z "$AWS_REGION" ]]; then
+    AWS_REGION="us-east-1"
+    info "No region found in AWS CLI config. Defaulting to us-east-1."
+  else
+    log "Auto-detected AWS Region: ${YELLOW}$AWS_REGION${NC}"
+  fi
+fi
 
 # ── Derived Variables ─────────────────────────────────────────────────────────
 
@@ -68,15 +102,15 @@ ASL_OUTPUT_FILE="${OUTPUT_DIR%/}/workflow.json"
 # Absolute versions of all paths passed to Terraform and Python scripts
 ABS_COMPOSITES_DIR="$(abs_path "$COMPOSITES_DIR")"
 ABS_ASL_OUTPUT_FILE="$(abs_path "$ASL_OUTPUT_FILE")"
-ABS_DYNO_REQUIREMENTS="$(abs_path "${DYNO_REQUIREMENTS_FILE:-python/dyno/requirements.txt}")"
-ABS_DYNO_LAYER_SOURCE="$(abs_path "${DYNO_LAYER_SOURCE_DIR:-"."}")"
+ABS_DYNO_REQUIREMENTS="$(abs_path "$DYNO_REQUIREMENTS_FILE")"
+ABS_DYNO_LAYER_SOURCE="$(abs_path "$DYNO_LAYER_SOURCE_DIR")"
 ABS_TERRAFORM_DIR="$(abs_path "$TERRAFORM_DIR")"
 
 # ── Prerequisites Check ───────────────────────────────────────────────────────
 
 step "System Checks & Prerequisites"
 
-for cmd in python3 terraform jq; do
+for cmd in python3 terraform jq aws; do
   if ! command -v "$cmd" &>/dev/null; then
     die "'$cmd' is required but not found in PATH."
   fi
@@ -93,6 +127,23 @@ done
 [[ -d "$ABS_TERRAFORM_DIR" ]]                 || die "Terraform directory not found: $TERRAFORM_DIR"
 
 info "All prerequisites satisfied."
+
+# ── Install Python Dependencies ───────────────────────────────────────────────
+
+step "Python Dependencies"
+
+info "Installing project Python dependencies..."
+pip3 install -q -r "${SCRIPT_DIR}/requirements.txt" 2>/dev/null \
+  || pip install -q -r "${SCRIPT_DIR}/requirements.txt" 2>/dev/null \
+  || die "Failed to install Python dependencies. Ensure pip is available."
+log "Python dependencies installed."
+
+# ── Validate AWS Credentials ──────────────────────────────────────────────────
+
+info "Validating AWS credentials..."
+aws sts get-caller-identity --output text > /dev/null 2>&1 \
+  || die "AWS credentials are not configured or have expired. Run 'aws configure' first."
+log "AWS credentials validated. Account: ${YELLOW}$AWS_ACCOUNT_ID${NC}"
 
 # ── Step 1: Generate Orchestrators ────────────────────────────────────────────
 
