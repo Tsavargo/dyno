@@ -40,6 +40,22 @@ def generate_workflow(
         print(f"Error: Invalid JSON in {json_path}: {exception}", file=sys.stderr)
         sys.exit(1)
 
+    # Validate the composites list is non-empty
+    composites = data.get("composites", [])
+    if not composites:
+        print(
+            "Error: Config file contains no composites. "
+            "Add at least one composite to the 'composites' array.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if not isinstance(composites, list):
+        print(
+            "Error: 'composites' must be a JSON array.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     # Configure Jinja2 Environment for the ASL (JSON) template
     template_abs = os.path.abspath(template_path)
     env = Environment(
@@ -71,7 +87,7 @@ def generate_workflow(
     # Pass the list of composites so the state machine knows exactly which
     # Lambdas to invoke, and supply AWS identifying info to construct proper ARNs
     generated_asl = template.render(
-        composites=data.get("composites", []),
+        composites=composites,
         s3_bucket=s3_bucket,
         aws_region=region,
         aws_account=account_id,
