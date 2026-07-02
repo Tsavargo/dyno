@@ -51,15 +51,21 @@ def copy_component_files(
     for function in functions:
         module_name = function.get("module")
         if not module_name:
-            continue
+            raise ValueError(
+                f"Function config is missing required 'module' field: {function}"
+            )
 
         src = os.path.join(source_dir, module_name)
         dst = os.path.join(destination_dir, module_name)
 
-        # Skip missing modules to allow partial builds, but warn the user
+        # Fail fast: a missing module directory means the generated orchestrator
+        # would fail at Lambda runtime with an ImportError.
         if not os.path.isdir(src):
-            print(f"[WARNING] Component directory not found, skipping: {src}")
-            continue
+            raise FileNotFoundError(
+                f"Atomic function directory not found: {src}\n"
+                f"  Referenced by composite config but the module does not exist.\n"
+                f"  Create the directory and add a main.py with a handler function."
+            )
 
         # Copy the atomic module into the composite package structure
         shutil.copytree(src, dst, dirs_exist_ok=True)
