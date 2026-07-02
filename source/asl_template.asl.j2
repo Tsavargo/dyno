@@ -4,7 +4,7 @@
   "StartAt": "<< composites[0].name >>",
   "States": {
 
-    <%#- Az első kompozit: sima Lambda Task %>
+    "<%#- The first composite is a direct Lambda Task (trigger entry point) %>"
     "<< composites[0].name >>": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
@@ -13,13 +13,17 @@
         "Payload": "{% $states.input << '%}' >>"
       },
       "Output": "{% { 'runtimeID': $states.result.Payload.runtimeID } << '%}' >>",
+      <%- if composites | length > 1 %>
       "Next": "<< composites[1].name >>"
+      <%- else %>
+      "End": true
+      <%- endif %>
     }<%- if composites | length > 1 %>,<%- endif %>
 
-    <%#- A 2..N kompozit: Distributed Map %>
     <%- for composite in composites[1:] %>
     <%- set key = composite.functions[0].input %>
     <%- set is_last = loop.last %>
+    "<%#- Remaining composites run as Distributed Maps over S3 objects %>"
     "<< composite.name >>": {
       "Type": "Map",
       "ItemReader": {
